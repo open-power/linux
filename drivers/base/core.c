@@ -493,6 +493,15 @@ static int device_add_attrs(struct device *dev)
 			goto err_remove_dev_groups;
 	}
 
+#ifdef CONFIG_OF
+	if (dev->of_node) {
+		error = sysfs_create_link(&dev->kobj, &dev->of_node->kobj,
+					  "of_node");
+		if (error)
+			dev_warn(dev, "Error %d creating of_node link\n", error);
+	}
+#endif /* CONFIG_OF */
+
 	return 0;
 
  err_remove_dev_groups:
