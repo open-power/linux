@@ -32,6 +32,7 @@
 #include "ast_dram_tables.h"
 
 static void ast_init_dram_2300(struct drm_device *dev);
+static void ast_init_output_control(struct drm_device *dev);
 
 void ast_enable_vga(struct drm_device *dev)
 {
@@ -383,6 +384,9 @@ void ast_post_gpu(struct drm_device *dev)
 		ast_init_dram_2300(dev);
 	else
 		ast_init_dram_reg(dev);
+
+	if (ast->chip == AST2400)
+		ast_init_output_control(dev);
 
 	ast_init_3rdtx(dev);
 }
@@ -1655,3 +1659,31 @@ static void ast_init_dram_2300(struct drm_device *dev)
 	} while ((reg & 0x40) == 0);
 }
 
+static void ast_init_output_control(struct drm_device *dev)
+{
+	struct ast_private *ast = dev->dev_private;
+	const uint32_t scu_addr = 0x1e6e2000;
+	const uint32_t scu_key = 0x1688a8a8;
+	uint32_t val;
+
+	/* unlock write access to SCUs */
+	val = ast_mindwm(ast, scu_addr);
+	ast_moutdwm(ast, scu_addr, scu_key);
+
+	/* configure SCU2C with the appropriate video output mode */
+	val = ast_mindwm(ast, scu_addr | 0x2c);
+
+	switch (ast->tx_chip_type) {
+	case AST_TX_SIL164:
+	case AST_TX_DP501:
+		/* Enable DVO output */
+		val &= ~0x40000;
+		break;
+	default:
+		/* VGA only: enable DAC output */
+		val &= ~0x30000;
+		break;
+	}
+
+	ast_moutdwm(ast, scu_addr | 0x2c, val);
+}
