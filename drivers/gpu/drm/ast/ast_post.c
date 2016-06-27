@@ -1681,7 +1681,7 @@ static void ast_init_output_control(struct drm_device *dev)
 		break;
 	default:
 		/* VGA only: enable DAC output */
-		val &= ~0x30000;
+		val &= ~0x70080;
 		break;
 	}
 
