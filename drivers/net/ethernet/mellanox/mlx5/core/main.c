@@ -914,7 +914,7 @@ static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv)
 	int err;
 
 	mutex_lock(&dev->intf_state_mutex);
-	if (dev->interface_state == MLX5_INTERFACE_STATE_UP) {
+	if (test_bit(MLX5_INTERFACE_STATE_UP, &dev->intf_state)) {
 		dev_warn(&dev->pdev->dev, "%s: interface is up, NOP\n",
 			 __func__);
 		goto out;
@@ -1063,7 +1063,8 @@ static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv)
 	if (err)
 		pr_info("failed request module on %s\n", MLX5_IB_MOD);
 
-	dev->interface_state = MLX5_INTERFACE_STATE_UP;
+	clear_bit(MLX5_INTERFACE_STATE_DOWN, &dev->intf_state);
+	set_bit(MLX5_INTERFACE_STATE_UP, &dev->intf_state);
 out:
 	mutex_unlock(&dev->intf_state_mutex);
 
@@ -1125,7 +1126,7 @@ static int mlx5_unload_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv)
 	int err = 0;
 
 	mutex_lock(&dev->intf_state_mutex);
-	if (dev->interface_state == MLX5_INTERFACE_STATE_DOWN) {
+	if (test_bit(MLX5_INTERFACE_STATE_DOWN, &dev->intf_state)) {
 		dev_warn(&dev->pdev->dev, "%s: interface is down, NOP\n",
 			 __func__);
 		goto out;
@@ -1155,7 +1156,8 @@ static int mlx5_unload_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv)
 	mlx5_cmd_cleanup(dev);
 
 out:
-	dev->interface_state = MLX5_INTERFACE_STATE_DOWN;
+	clear_bit(MLX5_INTERFACE_STATE_UP, &dev->intf_state);
+	set_bit(MLX5_INTERFACE_STATE_DOWN, &dev->intf_state);
 	mutex_unlock(&dev->intf_state_mutex);
 	return err;
 }
@@ -1365,6 +1367,18 @@ static const struct pci_error_handlers mlx5_err_handler = {
 	.resume		= mlx5_pci_resume
 };
 
+static void shutdown(struct pci_dev *pdev)
+{
+	struct mlx5_core_dev *dev  = pci_get_drvdata(pdev);
+	struct mlx5_priv *priv = &dev->priv;
+
+	dev_info(&pdev->dev, "Shutdown was called\n");
+	/* Notify mlx5 clients that the kernel is being shut down */
+	set_bit(MLX5_INTERFACE_STATE_SHUTDOWN, &dev->intf_state);
+	mlx5_unload_one(dev, priv);
+	mlx5_pci_disable_device(dev);
+}
+
 static const struct pci_device_id mlx5_core_pci_table[] = {
 	{ PCI_VDEVICE(MELLANOX, 0x1011) }, /* Connect-IB */
 	{ PCI_VDEVICE(MELLANOX, 0x1012) }, /* Connect-IB VF */
@@ -1382,6 +1396,7 @@ static struct pci_driver mlx5_core_driver = {
 	.id_table       = mlx5_core_pci_table,
 	.probe          = init_one,
 	.remove         = remove_one,
+	.shutdown       = shutdown,
 	.err_handler	= &mlx5_err_handler
 };
 
