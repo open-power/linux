@@ -683,6 +683,21 @@ void xhci_stop(struct usb_hcd *hcd)
 
 	mutex_lock(&xhci->mutex);
 
+	/*
+	 * We can't halt the secondary HCD, because it's also the primary
+	 * HCD, which will cause problems if we have devices attached to the
+	 * primary HCD, like a keyboard.
+	 */
+	if (!usb_hcd_is_primary_hcd(hcd)) {
+		/* The shared_hcd is going to be deallocated shortly (the USB
+		 * core only calls this function when allocation fails in
+		 * usb_add_hcd(), or usb_remove_hcd() is called).  So we need
+		 * to unset xHCI's pointer.  */
+		xhci->shared_hcd = NULL;
+		mutex_unlock(&xhci->mutex);
+		return;
+	}
+
 	if (!(xhci->xhc_state & XHCI_STATE_HALTED)) {
 		spin_lock_irq(&xhci->lock);
 
@@ -692,11 +707,6 @@ void xhci_stop(struct usb_hcd *hcd)
 		xhci_reset(xhci);
 
 		spin_unlock_irq(&xhci->lock);
-	}
-
-	if (!usb_hcd_is_primary_hcd(hcd)) {
-		mutex_unlock(&xhci->mutex);
-		return;
 	}
 
 	xhci_cleanup_msix(xhci);
