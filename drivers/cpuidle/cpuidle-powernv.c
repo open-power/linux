@@ -164,6 +164,24 @@ static int powernv_cpuidle_driver_init(void)
 		drv->state_count += 1;
 	}
 
+	/*
+	 * On PowerNV platform cpu_present may be less that cpu_possible in
+	 * cases where firmware detects the cpu, but it is not available to the
+	 * OS.  If CONFIG_HOTPLUG_CPU=n then such CPUs are not hotplugable at
+	 * runtime and hence cpu_devices are not created for those cpus by
+	 * generic topology_init().
+	 *
+	 * drv->cpumask defaults to cpu_possible_mask in
+	 * __cpuidle_driver_init().  This breaks cpuidle on powernv where
+	 * cpu_devices are not created for cpus in cpu_possible_mask that
+	 * cannot be hot-added later at runtime.
+	 *
+	 * Trying cpuidle_register_device() on a cpu without cpu_devices is
+	 * incorrect. Hence pass correct cpu mask to generic cpuidle driver.
+	 */
+
+	drv->cpumask = (struct cpumask *)cpu_present_mask;
+
 	return 0;
 }
 
