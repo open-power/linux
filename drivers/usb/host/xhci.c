@@ -795,6 +795,7 @@ static void xhci_shutdown(struct usb_hcd *hcd)
 	/* Yet another workaround for spurious wakeups at shutdown with HSW */
 	if (xhci->quirks & XHCI_SPURIOUS_WAKEUP)
 		pci_set_power_state(to_pci_dev(hcd->self.sysdev), PCI_D3hot);
+	pci_reset_function_locked(to_pci_dev(hcd->self.sysdev));
 }
 
 #ifdef CONFIG_PM
