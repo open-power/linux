@@ -24,11 +24,13 @@
 #include <linux/slab.h>
 #include <linux/cma.h>
 #include <linux/hugetlb.h>
+#include <linux/libfdt.h>
 
 #include <asm/debugfs.h>
 #include <asm/page.h>
 #include <asm/prom.h>
 #include <asm/rtas.h>
+#include <asm/opal.h>
 #include <asm/fadump.h>
 #include <asm/setup.h>
 
@@ -36,6 +38,7 @@ static struct fw_dump fw_dump;
 
 static void __init fadump_reserve_crash_area(u64 base);
 
+#ifndef CONFIG_PRESERVE_FA_DUMP
 static struct fadump_mem_struct fdm;
 static const struct fadump_mem_struct *fdm_active;
 #ifdef CONFIG_CMA
@@ -540,11 +543,6 @@ int __init fadump_reserve_mem(void)
 		return fadump_cma_init();
 	}
 	return 1;
-}
-
-unsigned long __init arch_reserved_kernel_pages(void)
-{
-	return memblock_reserved_size() / PAGE_SIZE;
 }
 
 /* Look for fadump= cmdline option. */
@@ -1684,6 +1682,116 @@ int __init setup_fadump(void)
 	return 1;
 }
 subsys_initcall(setup_fadump);
+#else /* !CONFIG_PRESERVE_FA_DUMP */
+
+/* Maximum number of memory regions kernel supports */
+#define OPAL_FADUMP_MAX_MEM_REGS		128
+
+/*
+ * OPAL FADump kernel metadata
+ *
+ * The address of this structure will be registered with f/w for retrieving
+ * and processing during crash dump.
+ */
+struct opal_fadump_mem_struct {
+	u8	version;
+	u8	reserved[3];
+	u16	region_cnt;             /* number of regions */
+	u16	registered_regions;     /* Regions registered for MPIPL */
+	u64	fadumphdr_addr;
+	struct opal_mpipl_region	rgn[OPAL_FADUMP_MAX_MEM_REGS];
+} __packed;
+
+
+/*
+ * When dump is active but PRESERVE_FA_DUMP is enabled on the kernel,
+ * ensure crash data is preserved in hope that the subsequent memory
+ * preserving kernel boot is going to process this crash data.
+ */
+void __init opal_fadump_dt_scan(struct fw_dump *fadump_conf, u64 node)
+{
+	const struct opal_fadump_mem_struct *opal_fdm_active;
+	const __be32 *prop;
+	unsigned long dn;
+	u64 addr = 0;
+	s64 ret;
+
+	dn = of_get_flat_dt_subnode_by_name(node, "dump");
+	if (dn == -FDT_ERR_NOTFOUND)
+		return;
+
+	/*
+	 * Check if dump has been initiated on last reboot.
+	 */
+	prop = of_get_flat_dt_prop(dn, "mpipl-boot", NULL);
+	if (!prop)
+		return;
+
+	ret = opal_mpipl_query_tag(OPAL_MPIPL_TAG_KERNEL, &addr);
+	if ((ret != OPAL_SUCCESS) || !addr) {
+		pr_debug("Could not get Kernel metadata (%lld)\n", ret);
+		return;
+	}
+
+	/*
+	 * Preserve memory only if kernel memory regions are registered
+	 * with f/w for MPIPL.
+	 */
+	addr = be64_to_cpu(addr);
+	pr_debug("Kernel metadata addr: %llx\n", addr);
+	opal_fdm_active = (void *)addr;
+	if (opal_fdm_active->registered_regions == 0)
+		return;
+
+	ret = opal_mpipl_query_tag(OPAL_MPIPL_TAG_BOOT_MEM, &addr);
+	if ((ret != OPAL_SUCCESS) || !addr) {
+		pr_err("Failed to get boot memory tag (%lld)\n", ret);
+		return;
+	}
+
+	/*
+	 * Memory below this address can be used for booting a
+	 * capture kernel or petitboot kernel. Preserve everything
+	 * above this address for processing crashdump.
+	 */
+	fadump_conf->boot_mem_top = be64_to_cpu(addr);
+	pr_debug("Preserve everything above %llx\n", fadump_conf->boot_mem_top);
+
+	pr_info("Firmware-assisted dump is active.\n");
+	fadump_conf->dump_active = 1;
+}
+
+/* Scan the Firmware Assisted dump configuration details. */
+int __init early_init_dt_scan_fw_dump(unsigned long node, const char *uname,
+				      int depth, void *data)
+{
+	if ((depth != 1) || (strcmp(uname, "ibm,opal") != 0))
+		return 0;
+
+	opal_fadump_dt_scan(&fw_dump, node);
+	return 1;
+}
+
+/*
+ * When dump is active but PRESERVE_FA_DUMP is enabled on the kernel,
+ * preserve crash data. The subsequent memory preserving kernel boot
+ * is likely to process this crash data.
+ */
+int __init fadump_reserve_mem(void)
+{
+	if (fw_dump.dump_active) {
+		/*
+		 * If last boot has crashed then reserve all the memory
+		 * above boot memory to preserve crash data.
+		 */
+		pr_info("Preserving crash data for processing in next boot.\n");
+		fadump_reserve_crash_area(fw_dump.boot_mem_top);
+	} else
+		pr_debug("FADump-aware kernel..\n");
+
+	return 1;
+}
+#endif /* CONFIG_PRESERVE_FA_DUMP */
 
 /* Preserve everything above the base address */
 static void __init fadump_reserve_crash_area(u64 base)
@@ -1707,4 +1815,9 @@ static void __init fadump_reserve_crash_area(u64 base)
 			(msize >> 20), mstart);
 		memblock_reserve(mstart, msize);
 	}
+}
+
+unsigned long __init arch_reserved_kernel_pages(void)
+{
+	return memblock_reserved_size() / PAGE_SIZE;
 }
